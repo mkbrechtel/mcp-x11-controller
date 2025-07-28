@@ -1,0 +1,33 @@
+# Binaries
+mcp-x11-controller
+*.exe
+
+# Test output
+*.log
+*.png
+*.jpg
+screenshot*
+test_*
+
+# Go build cache
+*.o
+*.a
+*.so
+
+# Temporary files
+*.tmp
+*.swp
+*~
+
+# IDE files
+.vscode/
+.idea/
+*.sublime-*
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Local config
+.env
+.claude.json
