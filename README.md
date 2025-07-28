@@ -2,6 +2,10 @@
 
 An MCP (Model Context Protocol) server that allows LLMs to control X11 displays. It can automatically start Xvfb (virtual display), a window manager, and a program of your choice.
 
+## ⚠️ WARNING
+
+**This code is 100% vibe-coded and has not been reviewed by any human. It is not quality controlled code. Use at your own risk!**
+
 ## Features
 
 - **Automatic Xvfb setup** - Creates a virtual X11 display automatically
