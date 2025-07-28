@@ -20,7 +20,7 @@ An MCP (Model Context Protocol) server that allows LLMs to control X11 displays.
 ## Building
 
 ```bash
-go build -o mcp-x11-controller .
+go build
 ```
 
 ## Usage
@@ -76,17 +76,12 @@ Get information about the X11 screen.
 
 **Returns:** Screen width, height, and root window ID
 
-### move_mouse
-Move the mouse cursor to specific coordinates.
+### click_at
+Move the mouse cursor to specific coordinates and click.
 
 **Arguments:**
 - `x` (number): X coordinate
 - `y` (number): Y coordinate
-
-### click
-Click a mouse button.
-
-**Arguments:**
 - `button` (number, optional): Button number (1=left, 2=middle, 3=right). Default: 1
 
 ### type_text
@@ -95,13 +90,27 @@ Type text by sending keyboard events.
 **Arguments:**
 - `text` (string): Text to type
 
-**Note:** Currently supports only basic characters: a, e, h, l, o, space, and newline.
+**Note:** Supports full keyboard input including:
+- All ASCII characters and symbols
+- Uppercase/lowercase with proper shift handling
+- Special characters (!@#$%^&*() etc.)
+- Modifier key combinations (Ctrl+A, Alt+Tab, etc.)
+- Special keys (Enter, Tab, Backspace)
 
 ### take_screenshot
-Take a screenshot of the X11 display.
+Take a screenshot of the X11 display and return the image data directly.
 
 **Arguments:**
-- `filename` (string, optional): Filename for the screenshot. Default: "screenshot.png"
+- `filename` (string, optional): If provided, also saves the screenshot to this file
+
+**Returns:** PNG image data that can be viewed directly
+
+### start_program
+Start a desktop program in the background.
+
+**Arguments:**
+- `program` (string): Program name or path to executable
+- `args` (array of strings, optional): Command line arguments
 
 ## Testing with Xvfb
 
@@ -120,6 +129,44 @@ export DISPLAY=:99
 ./mcp-x11-controller
 ```
 
+## Testing
+
+### Unit Tests
+
+Run the Go unit tests:
+```bash
+go test -v
+```
+
+Run with X11 (requires display):
+```bash
+DISPLAY=:0 go test -v
+```
+
+Run in short mode (skips X11 tests):
+```bash
+go test -short -v
+```
+
+### Integration Tests
+
+Run the comprehensive test suite:
+```bash
+./test_x11_controller.sh
+```
+
+Run the simple integration test:
+```bash
+./integration_test.sh
+```
+
+### Benchmarks
+
+Run performance benchmarks:
+```bash
+go test -bench=. -benchmem
+```
+
 ## Example MCP Requests
 
 Get screen info:
@@ -135,15 +182,28 @@ Get screen info:
 }
 ```
 
-Move mouse:
+Click at coordinates:
 ```json
 {
   "jsonrpc": "2.0",
   "method": "tools/call",
   "params": {
-    "name": "move_mouse",
-    "arguments": {"x": 100, "y": 200}
+    "name": "click_at",
+    "arguments": {"x": 100, "y": 200, "button": 1}
   },
   "id": 2
+}
+```
+
+Type text with modifiers:
+```json
+{
+  "jsonrpc": "2.0",
+  "method": "tools/call",
+  "params": {
+    "name": "type_text",
+    "arguments": {"text": "Hello World!\nCtrl+A\nCtrl+C"}
+  },
+  "id": 3
 }
 ```

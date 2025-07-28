@@ -18,14 +18,19 @@ import (
 	"time"
 
 	x "github.com/linuxdeepin/go-x11-client"
+	"github.com/linuxdeepin/go-x11-client/ext/test"
+	"github.com/linuxdeepin/go-x11-client/util/keysyms"
 	"github.com/modelcontextprotocol/go-sdk/jsonschema"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
 type X11Controller struct {
-	conn   *x.Conn
-	screen *x.Screen
-	root   x.Window
+	conn        *x.Conn
+	screen      *x.Screen
+	root        x.Window
+	keySymbols  *keysyms.KeySymbols
+	connAlive   bool
+	errorHandler func(error)
 }
 
 type Config struct {
@@ -54,20 +59,78 @@ func NewX11Controller() (*X11Controller, error) {
 	}
 	screen := &setup.Roots[0]
 
-	return &X11Controller{
-		conn:   conn,
-		screen: screen,
-		root:   screen.Root,
-	}, nil
+	// Initialize keyboard symbols
+	keySymbols := keysyms.NewKeySymbols(conn)
+
+	// Initialize XTEST extension
+	extReply, err := x.QueryExtension(conn, "XTEST").Reply(conn)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query XTEST extension: %w", err)
+	}
+	if !extReply.Present {
+		return nil, fmt.Errorf("XTEST extension not present")
+	}
+
+	// Query XTEST version
+	cookie := test.GetVersion(conn, test.MajorVersion, test.MinorVersion)
+	reply, err := cookie.Reply(conn)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get XTEST version: %w", err)
+	}
+	log.Printf("XTEST extension initialized: v%d.%d", reply.MajorVersion, reply.MinorVersion)
+
+	xc := &X11Controller{
+		conn:       conn,
+		screen:     screen,
+		root:       screen.Root,
+		keySymbols: keySymbols,
+		connAlive:  true,
+	}
+
+	// Set up error handling
+	xc.errorHandler = func(err error) {
+		log.Printf("X11 error: %v", err)
+		xc.connAlive = false
+	}
+
+	// Start connection monitor
+	go xc.monitorConnection()
+
+	return xc, nil
 }
 
 func (xc *X11Controller) Close() {
+	xc.connAlive = false
 	if xc.conn != nil {
 		xc.conn.Close()
 	}
 }
 
+func (xc *X11Controller) monitorConnection() {
+	for xc.connAlive {
+		time.Sleep(5 * time.Second)
+		// Try a simple operation to check connection health
+		_, err := x.QueryPointer(xc.conn, xc.root).Reply(xc.conn)
+		if err != nil {
+			if xc.errorHandler != nil {
+				xc.errorHandler(err)
+			}
+			return
+		}
+	}
+}
+
+func (xc *X11Controller) checkConnection() error {
+	if !xc.connAlive {
+		return fmt.Errorf("X11 connection lost")
+	}
+	return nil
+}
+
 func (xc *X11Controller) GetScreenInfo() (map[string]interface{}, error) {
+	if err := xc.checkConnection(); err != nil {
+		return nil, err
+	}
 	return map[string]interface{}{
 		"width":  xc.screen.WidthInPixels,
 		"height": xc.screen.HeightInPixels,
@@ -76,118 +139,288 @@ func (xc *X11Controller) GetScreenInfo() (map[string]interface{}, error) {
 }
 
 func (xc *X11Controller) MoveMouse(xPos, yPos int16) error {
+	if err := xc.checkConnection(); err != nil {
+		return err
+	}
 	cookie := x.WarpPointerChecked(xc.conn, 0, xc.root, 0, 0, 0, 0, xPos, yPos)
 	return cookie.Check(xc.conn)
 }
 
 func (xc *X11Controller) Click(button uint8) error {
-	// Get current pointer position
-	reply, err := x.QueryPointer(xc.conn, xc.root).Reply(xc.conn)
-	if err != nil {
+	if err := xc.checkConnection(); err != nil {
 		return err
 	}
+	
+	// Use XTEST FakeInput for button press
+	cookie1 := test.FakeInputChecked(xc.conn, x.ButtonPressEventCode, button, x.TimeCurrentTime, xc.root, 0, 0, 0)
+	if err := cookie1.Check(xc.conn); err != nil {
+		return fmt.Errorf("failed to send button press: %w", err)
+	}
+	
+	// Small delay between press and release
+	time.Sleep(10 * time.Millisecond)
+	
+	// Use XTEST FakeInput for button release
+	cookie2 := test.FakeInputChecked(xc.conn, x.ButtonReleaseEventCode, button, x.TimeCurrentTime, xc.root, 0, 0, 0)
+	if err := cookie2.Check(xc.conn); err != nil {
+		return fmt.Errorf("failed to send button release: %w", err)
+	}
+	
+	return nil
+}
 
-	// Send button press event
-	pressEvent := make([]byte, 32)
-	pressEvent[0] = x.ButtonPressEventCode
-	pressEvent[1] = button
-	x.Put32(pressEvent[4:], uint32(x.TimeCurrentTime))
-	x.Put32(pressEvent[8:], uint32(xc.root))
-	x.Put32(pressEvent[12:], uint32(xc.root))
-	x.Put16(pressEvent[20:], uint16(reply.RootX))
-	x.Put16(pressEvent[22:], uint16(reply.RootY))
-	x.Put16(pressEvent[24:], uint16(reply.RootX))
-	x.Put16(pressEvent[26:], uint16(reply.RootY))
-	x.Put16(pressEvent[28:], 0)
-	pressEvent[30] = 1 // same_screen
-
-	err = x.SendEventChecked(xc.conn, false, xc.root, 
-		x.EventMaskButtonPress, pressEvent).Check(xc.conn)
-	if err != nil {
+func (xc *X11Controller) ClickAt(xPos, yPos int16, button uint8) error {
+	if err := xc.checkConnection(); err != nil {
 		return err
 	}
-
-	// Send button release event
-	releaseEvent := make([]byte, 32)
-	releaseEvent[0] = x.ButtonReleaseEventCode
-	releaseEvent[1] = button
-	x.Put32(releaseEvent[4:], uint32(x.TimeCurrentTime))
-	x.Put32(releaseEvent[8:], uint32(xc.root))
-	x.Put32(releaseEvent[12:], uint32(xc.root))
-	x.Put16(releaseEvent[20:], uint16(reply.RootX))
-	x.Put16(releaseEvent[22:], uint16(reply.RootY))
-	x.Put16(releaseEvent[24:], uint16(reply.RootX))
-	x.Put16(releaseEvent[26:], uint16(reply.RootY))
-	x.Put16(releaseEvent[28:], 0)
-	releaseEvent[30] = 1 // same_screen
-
-	return x.SendEventChecked(xc.conn, false, xc.root,
-		x.EventMaskButtonRelease, releaseEvent).Check(xc.conn)
+	
+	// Move mouse to position
+	if err := xc.MoveMouse(xPos, yPos); err != nil {
+		return err
+	}
+	
+	// Small delay to ensure mouse has moved
+	time.Sleep(10 * time.Millisecond)
+	
+	// Click at the position
+	return xc.Click(button)
 }
 
 func (xc *X11Controller) TypeText(text string) error {
-	for _, char := range text {
-		keycode := xc.charToKeycode(char)
-		if keycode == 0 {
-			continue
+	if err := xc.checkConnection(); err != nil {
+		return err
+	}
+
+	// Get current input focus
+	focusReply, err := x.GetInputFocus(xc.conn).Reply(xc.conn)
+	if err != nil {
+		return fmt.Errorf("failed to get input focus: %w", err)
+	}
+	targetWindow := focusReply.Focus
+	if targetWindow == x.None || targetWindow == 1 { // PointerRoot = 1
+		targetWindow = xc.root
+	}
+
+	// Parse the text for special sequences
+	i := 0
+	for i < len(text) {
+		// Check for modifier sequences like Ctrl+C
+		if i+2 < len(text) && text[i+1] == '+' {
+			modifier := ""
+			if i >= 4 && text[i-4:i] == "Ctrl" {
+				modifier = "Ctrl"
+				i -= 4
+			} else if i >= 3 && text[i-3:i] == "Alt" {
+				modifier = "Alt"
+				i -= 3
+			} else if i >= 5 && text[i-5:i] == "Super" {
+				modifier = "Super"
+				i -= 5
+			}
+			
+			if modifier != "" && i+2 < len(text) {
+				// Skip the '+' and get the next character
+				char := rune(text[i+2])
+				if err := xc.typeCharWithModifier(targetWindow, char, modifier); err != nil {
+					return fmt.Errorf("failed to type %s+%c: %w", modifier, char, err)
+				}
+				i += 3 // Skip past the modifier key combo
+				continue
+			}
 		}
 		
-		// Send key press
-		pressEvent := make([]byte, 32)
-		pressEvent[0] = x.KeyPressEventCode
-		pressEvent[1] = byte(keycode)
-		x.Put32(pressEvent[4:], uint32(x.TimeCurrentTime))
-		x.Put32(pressEvent[8:], uint32(xc.root))
-		x.Put32(pressEvent[12:], uint32(xc.root))
-		pressEvent[30] = 1 // same_screen
-
-		err := x.SendEventChecked(xc.conn, false, xc.root,
-			x.EventMaskKeyPress, pressEvent).Check(xc.conn)
-		if err != nil {
-			return err
+		// Regular character
+		if err := xc.typeChar(targetWindow, rune(text[i])); err != nil {
+			return fmt.Errorf("failed to type character %c: %w", text[i], err)
 		}
-
-		// Send key release
-		releaseEvent := make([]byte, 32)
-		releaseEvent[0] = x.KeyReleaseEventCode
-		releaseEvent[1] = byte(keycode)
-		x.Put32(releaseEvent[4:], uint32(x.TimeCurrentTime))
-		x.Put32(releaseEvent[8:], uint32(xc.root))
-		x.Put32(releaseEvent[12:], uint32(xc.root))
-		releaseEvent[30] = 1 // same_screen
-
-		err = x.SendEventChecked(xc.conn, false, xc.root,
-			x.EventMaskKeyRelease, releaseEvent).Check(xc.conn)
-		if err != nil {
-			return err
-		}
+		i++
+		// Small delay between keystrokes
+		time.Sleep(10 * time.Millisecond)
 	}
 	return nil
 }
 
-func (xc *X11Controller) charToKeycode(char rune) x.Keycode {
-	// Basic ASCII to keycode mapping
+func (xc *X11Controller) typeChar(window x.Window, char rune) error {
+	// Handle special characters
+	var keysym x.Keysym
+	var needShift bool
+
 	switch char {
-	case 'a', 'A':
-		return 38
-	case 'h', 'H':
-		return 43
-	case 'e', 'E':
-		return 26
-	case 'l', 'L':
-		return 46
-	case 'o', 'O':
-		return 32
-	case ' ':
-		return 65
 	case '\n':
-		return 36
+		keysym = keysyms.XK_Return
+	case '\t':
+		keysym = keysyms.XK_Tab
+	case '\b':
+		keysym = keysyms.XK_BackSpace
 	default:
-		return 0
+		// For regular characters, check if we need shift
+		keysym = x.Keysym(char)
+		// Check if this character requires shift
+		lower, _ := keysyms.ConvertCase(keysym)
+		if char >= 'A' && char <= 'Z' {
+			needShift = true
+			keysym = lower // Use lowercase keycode with shift
+		} else if char == '!' || char == '@' || char == '#' || char == '$' || 
+				  char == '%' || char == '^' || char == '&' || char == '*' ||
+				  char == '(' || char == ')' || char == '_' || char == '+' ||
+				  char == '{' || char == '}' || char == '|' || char == ':' ||
+				  char == '"' || char == '<' || char == '>' || char == '?' ||
+				  char == '~' {
+			needShift = true
+			// Map shifted characters to their base keys
+			switch char {
+			case '!': keysym = x.Keysym('1')
+			case '@': keysym = x.Keysym('2')
+			case '#': keysym = x.Keysym('3')
+			case '$': keysym = x.Keysym('4')
+			case '%': keysym = x.Keysym('5')
+			case '^': keysym = x.Keysym('6')
+			case '&': keysym = x.Keysym('7')
+			case '*': keysym = x.Keysym('8')
+			case '(': keysym = x.Keysym('9')
+			case ')': keysym = x.Keysym('0')
+			case '_': keysym = x.Keysym('-')
+			case '+': keysym = x.Keysym('=')
+			case '{': keysym = x.Keysym('[')
+			case '}': keysym = x.Keysym(']')
+			case '|': keysym = x.Keysym('\\')
+			case ':': keysym = x.Keysym(';')
+			case '"': keysym = x.Keysym('\'')
+			case '<': keysym = x.Keysym(',')
+			case '>': keysym = x.Keysym('.')
+			case '?': keysym = x.Keysym('/')
+			case '~': keysym = x.Keysym('`')
+			}
+		}
 	}
+
+	// Get keycodes for this keysym
+	keycodes := xc.keySymbols.GetKeycodes(keysym)
+	if len(keycodes) == 0 {
+		// Try StringToKeycodes as fallback
+		var err error
+		keycodes, err = xc.keySymbols.StringToKeycodes(string(char))
+		if err != nil || len(keycodes) == 0 {
+			log.Printf("Warning: no keycode found for character %c (keysym 0x%X)", char, keysym)
+			return nil // Skip unmapped characters
+		}
+	}
+
+	keycode := keycodes[0]
+
+	// Press shift if needed
+	if needShift {
+		// Get proper shift keycode
+		shiftKeycodes := xc.keySymbols.GetKeycodes(keysyms.XK_Shift_L)
+		if len(shiftKeycodes) == 0 {
+			shiftKeycodes = []x.Keycode{50} // Fallback to common value
+		}
+		if err := xc.sendKeyEvent(window, shiftKeycodes[0], true); err != nil {
+			return err
+		}
+	}
+
+	// Send key press
+	if err := xc.sendKeyEvent(window, keycode, true); err != nil {
+		return err
+	}
+
+	// Send key release
+	if err := xc.sendKeyEvent(window, keycode, false); err != nil {
+		return err
+	}
+
+	// Release shift if it was pressed
+	if needShift {
+		// Get proper shift keycode
+		shiftKeycodes := xc.keySymbols.GetKeycodes(keysyms.XK_Shift_L)
+		if len(shiftKeycodes) == 0 {
+			shiftKeycodes = []x.Keycode{50} // Fallback to common value
+		}
+		if err := xc.sendKeyEvent(window, shiftKeycodes[0], false); err != nil {
+			return err
+		}
+	}
+
+	return nil
 }
 
+func (xc *X11Controller) sendKeyEvent(window x.Window, keycode x.Keycode, press bool) error {
+	// Use XTEST FakeInput for key events
+	eventType := x.KeyPressEventCode
+	if !press {
+		eventType = x.KeyReleaseEventCode
+	}
+	
+	cookie := test.FakeInputChecked(xc.conn, uint8(eventType), uint8(keycode), x.TimeCurrentTime, xc.root, 0, 0, 0)
+	if err := cookie.Check(xc.conn); err != nil {
+		return fmt.Errorf("failed to send key event: %w", err)
+	}
+	
+	return nil
+}
+
+func (xc *X11Controller) typeCharWithModifier(window x.Window, char rune, modifier string) error {
+	// Get modifier keycode
+	var modKeysym x.Keysym
+	switch modifier {
+	case "Ctrl":
+		modKeysym = keysyms.XK_Control_L
+	case "Alt":
+		modKeysym = keysyms.XK_Alt_L
+	case "Super":
+		modKeysym = keysyms.XK_Super_L
+	default:
+		return fmt.Errorf("unknown modifier: %s", modifier)
+	}
+
+	modKeycodes := xc.keySymbols.GetKeycodes(modKeysym)
+	if len(modKeycodes) == 0 {
+		return fmt.Errorf("no keycode found for modifier %s", modifier)
+	}
+	modKeycode := modKeycodes[0]
+
+	// Get character keycode
+	keysym := x.Keysym(char)
+	// For Ctrl combinations, use lowercase
+	if modifier == "Ctrl" && char >= 'A' && char <= 'Z' {
+		keysym = x.Keysym(char + 32) // Convert to lowercase
+	}
+
+	keycodes := xc.keySymbols.GetKeycodes(keysym)
+	if len(keycodes) == 0 {
+		return fmt.Errorf("no keycode found for character %c", char)
+	}
+	keycode := keycodes[0]
+
+	// Press modifier
+	if err := xc.sendKeyEvent(window, modKeycode, true); err != nil {
+		return err
+	}
+
+	// Press key
+	if err := xc.sendKeyEvent(window, keycode, true); err != nil {
+		return err
+	}
+
+	// Release key
+	if err := xc.sendKeyEvent(window, keycode, false); err != nil {
+		return err
+	}
+
+	// Release modifier
+	if err := xc.sendKeyEvent(window, modKeycode, false); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+
 func (xc *X11Controller) captureScreen() (*image.RGBA, error) {
+	if err := xc.checkConnection(); err != nil {
+		return nil, err
+	}
 	// Get the image from X11
 	width := xc.screen.WidthInPixels
 	height := xc.screen.HeightInPixels
@@ -241,6 +474,9 @@ func (xc *X11Controller) captureScreen() (*image.RGBA, error) {
 }
 
 func (xc *X11Controller) TakeScreenshot(filename string) error {
+	if err := xc.checkConnection(); err != nil {
+		return err
+	}
 	img, err := xc.captureScreen()
 	if err != nil {
 		return err
@@ -261,6 +497,9 @@ func (xc *X11Controller) TakeScreenshot(filename string) error {
 }
 
 func (xc *X11Controller) GetScreenshotData() ([]byte, error) {
+	if err := xc.checkConnection(); err != nil {
+		return nil, err
+	}
 	img, err := xc.captureScreen()
 	if err != nil {
 		return nil, err
@@ -273,6 +512,37 @@ func (xc *X11Controller) GetScreenshotData() ([]byte, error) {
 	}
 	
 	return buf.Bytes(), nil
+}
+
+func (xc *X11Controller) StartProgram(program string, args []string) error {
+	if err := xc.checkConnection(); err != nil {
+		return err
+	}
+	
+	// Check if program exists
+	if _, err := exec.LookPath(program); err != nil {
+		return fmt.Errorf("program not found: %s", program)
+	}
+	
+	// Start the program in the background
+	cmd := exec.Command(program, args...)
+	cmd.Env = append(os.Environ(), fmt.Sprintf("DISPLAY=%s", os.Getenv("DISPLAY")))
+	
+	// Detach from parent process
+	cmd.Stdout = nil
+	cmd.Stderr = nil
+	cmd.Stdin = nil
+	
+	if err := cmd.Start(); err != nil {
+		return fmt.Errorf("failed to start program: %w", err)
+	}
+	
+	// Detach the process
+	go func() {
+		cmd.Wait()
+	}()
+	
+	return nil
 }
 
 func startXvfb(config *Config) error {
@@ -397,7 +667,7 @@ func main() {
 	flag.BoolVar(&config.UseXvfb, "xvfb", true, "Use Xvfb virtual display")
 	flag.StringVar(&config.Display, "display", ":99", "X11 display number")
 	flag.StringVar(&config.Resolution, "resolution", "1024x768", "Screen resolution (WIDTHxHEIGHT)")
-	flag.StringVar(&config.WindowManager, "wm", "i3", "Window manager to use (e.g., i3, openbox)")
+	flag.StringVar(&config.WindowManager, "wm", "openbox", "Window manager to use (e.g., i3, openbox)")
 	flag.StringVar(&config.Program, "program", "firefox", "Program to launch")
 	flag.Parse()
 
@@ -473,71 +743,43 @@ func main() {
 		}, nil
 	})
 
-	// Move mouse tool
-	moveMouseTool := &mcp.Tool{
-		Name:        "move_mouse",
-		Description: "Move the mouse cursor to specific coordinates",
+	// Click at coordinates tool (combines move and click)
+	clickAtTool := &mcp.Tool{
+		Name:        "click_at",
+		Description: "Move mouse to coordinates and click",
 		InputSchema: &jsonschema.Schema{
 			Type: "object",
 			Properties: map[string]*jsonschema.Schema{
 				"x": {Type: "number", Description: "X coordinate"},
 				"y": {Type: "number", Description: "Y coordinate"},
-			},
-			Required: []string{"x", "y"},
-		},
-	}
-	
-	server.AddTool(moveMouseTool, func(ctx context.Context, session *mcp.ServerSession, params *mcp.CallToolParamsFor[map[string]any]) (*mcp.CallToolResultFor[any], error) {
-		args := params.Arguments
-		
-		x := int16(args["x"].(float64))
-		y := int16(args["y"].(float64))
-		
-		if err := xc.MoveMouse(x, y); err != nil {
-			return nil, err
-		}
-		
-		return &mcp.CallToolResultFor[any]{
-			Content: []mcp.Content{
-				&mcp.TextContent{
-					Text: fmt.Sprintf("Moved mouse to (%d, %d)", x, y),
-				},
-			},
-		}, nil
-	})
-
-	// Click tool
-	clickTool := &mcp.Tool{
-		Name:        "click",
-		Description: "Click a mouse button (1=left, 2=middle, 3=right)",
-		InputSchema: &jsonschema.Schema{
-			Type: "object",
-			Properties: map[string]*jsonschema.Schema{
 				"button": {
 					Type:        "number",
 					Description: "Button number (1=left, 2=middle, 3=right)",
 					Default:     json.RawMessage("1"),
 				},
 			},
+			Required: []string{"x", "y"},
 		},
 	}
 	
-	server.AddTool(clickTool, func(ctx context.Context, session *mcp.ServerSession, params *mcp.CallToolParamsFor[map[string]any]) (*mcp.CallToolResultFor[any], error) {
+	server.AddTool(clickAtTool, func(ctx context.Context, session *mcp.ServerSession, params *mcp.CallToolParamsFor[map[string]any]) (*mcp.CallToolResultFor[any], error) {
 		args := params.Arguments
 		
+		x := int16(args["x"].(float64))
+		y := int16(args["y"].(float64))
 		button := uint8(1)
 		if b, ok := args["button"].(float64); ok {
 			button = uint8(b)
 		}
 		
-		if err := xc.Click(button); err != nil {
+		if err := xc.ClickAt(x, y, button); err != nil {
 			return nil, err
 		}
 		
 		return &mcp.CallToolResultFor[any]{
 			Content: []mcp.Content{
 				&mcp.TextContent{
-					Text: fmt.Sprintf("Clicked button %d", button),
+					Text: fmt.Sprintf("Clicked button %d at (%d, %d)", button, x, y),
 				},
 			},
 		}, nil
@@ -611,6 +853,54 @@ func main() {
 				&mcp.ImageContent{
 					MIMEType: "image/png",
 					Data:     imageData,
+				},
+			},
+		}, nil
+	})
+
+	// Start program tool
+	startProgramTool := &mcp.Tool{
+		Name:        "start_program",
+		Description: "Start a desktop program in the background",
+		InputSchema: &jsonschema.Schema{
+			Type: "object",
+			Properties: map[string]*jsonschema.Schema{
+				"program": {
+					Type:        "string",
+					Description: "Program name or path to executable",
+				},
+				"args": {
+					Type:        "array",
+					Description: "Command line arguments (optional)",
+					Items:       &jsonschema.Schema{Type: "string"},
+				},
+			},
+			Required: []string{"program"},
+		},
+	}
+	
+	server.AddTool(startProgramTool, func(ctx context.Context, session *mcp.ServerSession, params *mcp.CallToolParamsFor[map[string]any]) (*mcp.CallToolResultFor[any], error) {
+		args := params.Arguments
+		
+		program := args["program"].(string)
+		var cmdArgs []string
+		
+		if argsRaw, ok := args["args"].([]interface{}); ok {
+			for _, arg := range argsRaw {
+				if s, ok := arg.(string); ok {
+					cmdArgs = append(cmdArgs, s)
+				}
+			}
+		}
+		
+		if err := xc.StartProgram(program, cmdArgs); err != nil {
+			return nil, err
+		}
+		
+		return &mcp.CallToolResultFor[any]{
+			Content: []mcp.Content{
+				&mcp.TextContent{
+					Text: fmt.Sprintf("Started program: %s %s", program, strings.Join(cmdArgs, " ")),
 				},
 			},
 		}, nil
