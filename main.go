@@ -1,10 +1,14 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"flag"
 	"fmt"
+	"image"
+	"image/color"
+	"image/png"
 	"log"
 	"os"
 	"os/exec"
@@ -181,6 +185,94 @@ func (xc *X11Controller) charToKeycode(char rune) x.Keycode {
 	default:
 		return 0
 	}
+}
+
+func (xc *X11Controller) captureScreen() (*image.RGBA, error) {
+	// Get the image from X11
+	width := xc.screen.WidthInPixels
+	height := xc.screen.HeightInPixels
+	
+	// Get image from root window (ZPixmap format = 2)
+	cookie := x.GetImage(xc.conn, x.ImageFormatZPixmap, x.Drawable(xc.root), 
+		0, 0, width, height, 0xffffffff)
+	
+	reply, err := cookie.Reply(xc.conn)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get image: %w", err)
+	}
+	
+	// Create RGBA image
+	img := image.NewRGBA(image.Rect(0, 0, int(width), int(height)))
+	
+	// Convert the image data based on depth
+	if reply.Depth == 24 || reply.Depth == 32 {
+		// X11 usually returns data in BGRA format with 32-bit alignment
+		// Even for 24-bit depth, rows are often padded to 32-bit boundaries
+		bytesPerPixel := 4 // Always use 4 bytes per pixel for simplicity
+		expectedLen := int(width) * int(height) * bytesPerPixel
+		
+		if len(reply.Data) < expectedLen {
+			// Try with 3 bytes per pixel if data is shorter
+			bytesPerPixel = 3
+			expectedLen = int(width) * int(height) * bytesPerPixel
+		}
+		
+		for y := 0; y < int(height); y++ {
+			for x := 0; x < int(width); x++ {
+				offset := (y*int(width) + x) * bytesPerPixel
+				if offset+2 < len(reply.Data) {
+					// BGRA/BGR to RGBA conversion
+					b := reply.Data[offset]
+					g := reply.Data[offset+1]
+					r := reply.Data[offset+2]
+					a := uint8(255)
+					if bytesPerPixel == 4 && offset+3 < len(reply.Data) {
+						a = reply.Data[offset+3]
+					}
+					img.SetRGBA(x, y, color.RGBA{R: r, G: g, B: b, A: a})
+				}
+			}
+		}
+	} else {
+		return nil, fmt.Errorf("unsupported image depth: %d", reply.Depth)
+	}
+	
+	return img, nil
+}
+
+func (xc *X11Controller) TakeScreenshot(filename string) error {
+	img, err := xc.captureScreen()
+	if err != nil {
+		return err
+	}
+	
+	// Save to file
+	file, err := os.Create(filename)
+	if err != nil {
+		return fmt.Errorf("failed to create file: %w", err)
+	}
+	defer file.Close()
+	
+	if err := png.Encode(file, img); err != nil {
+		return fmt.Errorf("failed to encode PNG: %w", err)
+	}
+	
+	return nil
+}
+
+func (xc *X11Controller) GetScreenshotData() ([]byte, error) {
+	img, err := xc.captureScreen()
+	if err != nil {
+		return nil, err
+	}
+	
+	// Encode to PNG in memory
+	var buf bytes.Buffer
+	if err := png.Encode(&buf, img); err != nil {
+		return nil, fmt.Errorf("failed to encode PNG: %w", err)
+	}
+	
+	return buf.Bytes(), nil
 }
 
 func startXvfb(config *Config) error {
@@ -500,33 +592,25 @@ func main() {
 	server.AddTool(screenshotTool, func(ctx context.Context, session *mcp.ServerSession, params *mcp.CallToolParamsFor[map[string]any]) (*mcp.CallToolResultFor[any], error) {
 		args := params.Arguments
 		
-		filename := "screenshot.png"
+		// Get screenshot data
+		imageData, err := xc.GetScreenshotData()
+		if err != nil {
+			return nil, fmt.Errorf("failed to take screenshot: %w", err)
+		}
+		
+		// Also save to file if filename is provided
 		if f, ok := args["filename"].(string); ok && f != "" {
-			filename = f
-		}
-		
-		// Use import command to take screenshot
-		cmd := exec.Command("import", "-window", "root", filename)
-		cmd.Env = append(os.Environ(), "DISPLAY="+config.Display)
-		
-		if err := cmd.Run(); err != nil {
-			// Try alternative: xwd + convert
-			xwdCmd := exec.Command("xwd", "-root", "-out", "/tmp/screenshot.xwd")
-			xwdCmd.Env = append(os.Environ(), "DISPLAY="+config.Display)
-			if err := xwdCmd.Run(); err != nil {
-				return nil, fmt.Errorf("failed to take screenshot: %w", err)
-			}
-			
-			convertCmd := exec.Command("convert", "/tmp/screenshot.xwd", filename)
-			if err := convertCmd.Run(); err != nil {
-				return nil, fmt.Errorf("failed to convert screenshot: %w", err)
+			if err := xc.TakeScreenshot(f); err != nil {
+				log.Printf("Warning: failed to save screenshot to file: %v", err)
 			}
 		}
 		
+		// Return image content directly
 		return &mcp.CallToolResultFor[any]{
 			Content: []mcp.Content{
-				&mcp.TextContent{
-					Text: fmt.Sprintf("Screenshot saved to: %s", filename),
+				&mcp.ImageContent{
+					MIMEType: "image/png",
+					Data:     imageData,
 				},
 			},
 		}, nil
