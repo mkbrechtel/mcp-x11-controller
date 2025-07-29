@@ -72,14 +72,14 @@ Use existing X11 display:
 
 ## MCP Tools
 
-### get_screen_info
+### x11_get_screen_info
 Get information about the X11 screen.
 
 **Arguments:** None
 
-**Returns:** Screen width, height, and root window ID
+**Returns:** Screen width, height, and screenshot
 
-### click_at
+### x11_click_at
 Move the mouse cursor to specific coordinates and click.
 
 **Arguments:**
@@ -87,7 +87,7 @@ Move the mouse cursor to specific coordinates and click.
 - `y` (number): Y coordinate
 - `button` (number, optional): Button number (1=left, 2=middle, 3=right). Default: 1
 
-### type_text
+### x11_type_text
 Type text by sending keyboard events.
 
 **Arguments:**
@@ -104,7 +104,7 @@ Type text by sending keyboard events.
 - Does NOT support modifier key combinations (Ctrl+A, Alt+Tab, etc.)
 - For other special keys and combinations, use the `key_press` tool
 
-### key_press
+### x11_key_press
 Press special keys or key combinations.
 
 **Arguments:**
@@ -119,7 +119,7 @@ Press special keys or key combinations.
 - `alt` - Alt key
 - `super` / `win` / `cmd` - Super/Windows/Command key
 
-### take_screenshot
+### x11_take_screenshot
 Take a screenshot of the X11 display and return the image data directly.
 
 **Arguments:**
@@ -127,12 +127,30 @@ Take a screenshot of the X11 display and return the image data directly.
 
 **Returns:** PNG image data that can be viewed directly
 
-### start_program
+### x11_start_program
 Start a desktop program in the background.
 
 **Arguments:**
 - `program` (string): Program name or path to executable
 - `args` (array of strings, optional): Command line arguments
+- `delay` (number, optional): Milliseconds to wait before taking screenshot
+
+**Returns:** Process ID and screenshot after delay
+
+### x11_list_windows
+List all visible X11 windows with their IDs, titles, and classes.
+
+**Arguments:** None
+
+**Returns:** List of windows with ID, Title, and Class properties
+
+### x11_focus_window
+Set input focus to a specific window by its ID.
+
+**Arguments:**
+- `window_id` (number): The X11 window ID to focus
+
+**Returns:** Screenshot showing the focused window
 
 ## Testing with Xvfb
 
@@ -189,69 +207,13 @@ Run performance benchmarks:
 go test -bench=. -benchmem
 ```
 
-## Example MCP Requests
+## Available MCP Tools
 
-Get screen info:
-```json
-{
-  "jsonrpc": "2.0",
-  "method": "tools/call",
-  "params": {
-    "name": "get_screen_info",
-    "arguments": {}
-  },
-  "id": 1
-}
-```
-
-Click at coordinates:
-```json
-{
-  "jsonrpc": "2.0",
-  "method": "tools/call",
-  "params": {
-    "name": "click_at",
-    "arguments": {"x": 100, "y": 200, "button": 1}
-  },
-  "id": 2
-}
-```
-
-Type text with newlines:
-```json
-{
-  "jsonrpc": "2.0",
-  "method": "tools/call",
-  "params": {
-    "name": "type_text",
-    "arguments": {"text": "Hello World!\nThis is a new line"}
-  },
-  "id": 3
-}
-```
-
-Press special keys:
-```json
-{
-  "jsonrpc": "2.0",
-  "method": "tools/call",
-  "params": {
-    "name": "key_press",
-    "arguments": {"key": "Enter"}
-  },
-  "id": 4
-}
-```
-
-Press key combinations:
-```json
-{
-  "jsonrpc": "2.0",
-  "method": "tools/call",
-  "params": {
-    "name": "key_press",
-    "arguments": {"combo": "ctrl+c"}
-  },
-  "id": 5
-}
-```
+- **x11_get_screen_info** - Get screen dimensions and screenshot
+- **x11_take_screenshot** - Capture the current display
+- **x11_click_at** - Move mouse and click at coordinates
+- **x11_type_text** - Type text character by character
+- **x11_key_press** - Press special keys or key combinations
+- **x11_start_program** - Launch desktop applications
+- **x11_list_windows** - List all visible windows
+- **x11_focus_window** - Set focus to a specific window
