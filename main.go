@@ -42,6 +42,12 @@ type KeyPressInput struct {
 	Delay int    `json:"delay,omitempty"`
 }
 
+type I3GetTreeInput struct{}
+
+type I3CmdInput struct {
+	Command string `json:"command" jsonschema:"required"`
+}
+
 func main() {
 	// Parse command line flags
 	var (
@@ -78,23 +84,20 @@ func main() {
 		log.Println("No DISPLAY set, will start Xvfb")
 	}
 	
-	// Connect to X11
+	// Connect to X11 with options
+	opts := x11.ConnectOptions{
+		StartXvfb:  os.Getenv("DISPLAY") == "",
+		Resolution: "1024x768",
+		StartWM:    !*noWM,
+		WMName:     *wmName,
+	}
+	
 	var err error
-	client, err = x11.Connect()
+	client, err = x11.ConnectWithOptions(opts)
 	if err != nil {
 		log.Fatalf("Failed to connect to X11: %v", err)
 	}
 	defer client.Close()
-	
-	// Start window manager unless disabled
-	if !*noWM {
-		_, err := client.StartApp(*wmName, nil)
-		if err != nil {
-			log.Printf("Warning: failed to start window manager %s: %v", *wmName, err)
-		} else {
-			log.Printf("Started window manager: %s", *wmName)
-		}
-	}
 	
 	// Create MCP server
 	server := mcp.NewServer(
@@ -104,7 +107,26 @@ func main() {
 			Title:   "X11 Controller MCP Server",
 		},
 		&mcp.ServerOptions{
-			Instructions: "Control X11 desktop applications through MCP",
+			Instructions: `Control X11 desktop applications through MCP
+
+## Window Management with i3
+
+When i3 window manager is running, use these commands:
+
+1. **i3_get_tree** - Get the window tree to find windows
+   - Returns JSON tree structure with window IDs, titles, classes
+   - Look for nodes with "window_properties" to find actual windows
+
+2. **i3_cmd** - Control windows with i3 commands
+   - Focus window: [con_id=WINDOW_ID] focus
+   - Switch workspace: workspace NUMBER
+   - Move window: [con_id=WINDOW_ID] move to workspace NUMBER
+   - Focus by class: [class="CLASS_NAME"] focus
+   - Multiple commands: command1; command2
+
+Example workflow:
+1. Use i3_get_tree to find window IDs
+2. Use i3_cmd with [con_id=ID] focus to switch to that window`,
 		},
 	)
 	
@@ -364,6 +386,68 @@ func main() {
 			}, nil
 		},
 	)
+	
+	// i3_get_tree tool (only available when i3 is connected)
+	if client.I3Enabled() {
+		mcp.AddTool(server,
+			&mcp.Tool{
+				Name:        "i3_get_tree",
+				Title:       "i3 Get Tree",
+				Description: "Get the i3 window tree as JSON. Use this to find window IDs and container structure for window management.",
+			},
+			func(ctx context.Context, session *mcp.ServerSession, params *mcp.CallToolParamsFor[I3GetTreeInput]) (*mcp.CallToolResultFor[any], error) {
+				treeJSON, err := client.I3GetTree()
+				if err != nil {
+					return nil, err
+				}
+				
+				content := []mcp.Content{
+					&mcp.TextContent{
+						Text: treeJSON,
+					},
+				}
+				
+				return &mcp.CallToolResultFor[any]{
+					Content: content,
+				}, nil
+			},
+		)
+		
+		// i3_cmd tool
+		mcp.AddTool(server,
+			&mcp.Tool{
+				Name:        "i3_cmd",
+				Title:       "i3 Command",
+				Description: "Send a command to i3 window manager. Examples: '[con_id=1234] focus' to focus a window, 'workspace 2' to switch workspace, '[class=\"Firefox\"] move to workspace 3' to move windows.",
+			},
+			func(ctx context.Context, session *mcp.ServerSession, params *mcp.CallToolParamsFor[I3CmdInput]) (*mcp.CallToolResultFor[any], error) {
+				result, err := client.I3Command(params.Arguments.Command)
+				if err != nil {
+					return nil, err
+				}
+				
+				// Take screenshot to show result
+				pngData, err := client.ScreenshotPNG()
+				if err != nil {
+					return nil, fmt.Errorf("failed to take screenshot: %w", err)
+				}
+				
+				content := []mcp.Content{
+					&mcp.TextContent{
+						Text: fmt.Sprintf("i3 command result: %s", result),
+					},
+					&mcp.ImageContent{
+						Data:     pngData,
+						MIMEType: "image/png",
+					},
+				}
+				
+				return &mcp.CallToolResultFor[any]{
+					Content: content,
+				}, nil
+			},
+		)
+	}
 	
 	// Run the server
 	transport := mcp.NewStdioTransport()

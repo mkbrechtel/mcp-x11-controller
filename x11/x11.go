@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"strings"
 	"time"
 
 	x "github.com/linuxdeepin/go-x11-client"
@@ -17,6 +18,7 @@ type Client struct {
 	root        x.Window
 	xvfbProcess *exec.Cmd // Track Xvfb if we started it
 	display     string    // The display we're connected to
+	i3Connected bool      // Whether i3 is available
 }
 
 // ScreenInfo contains display information
@@ -31,6 +33,8 @@ type ConnectOptions struct {
 	Display      string // X11 display to use
 	StartXvfb    bool   // Whether to start Xvfb if no display
 	Resolution   string // Xvfb resolution (default: 1024x768)
+	StartWM      bool   // Whether to start a window manager
+	WMName       string // Window manager command (default: "i3 -a")
 }
 
 // Connect establishes a connection to the X server with default options
@@ -38,6 +42,8 @@ func Connect() (*Client, error) {
 	return ConnectWithOptions(ConnectOptions{
 		StartXvfb:  true,
 		Resolution: "1024x768",
+		StartWM:    true,
+		WMName:     "i3 -a",
 	})
 }
 
@@ -66,9 +72,12 @@ func ConnectWithOptions(opts ConnectOptions) (*Client, error) {
 			
 			// Check if display is in use
 			if _, err := os.Stat(lockFile); os.IsNotExist(err) {
-				// Also check if we can bind to the socket
-				socketPath := fmt.Sprintf("/tmp/.X11-unix/X%d", i)
-				if _, err := os.Stat(socketPath); os.IsNotExist(err) {
+				// Try to start Xvfb on this display to check if it's really available
+				testCmd := exec.Command("Xvfb", testDisplay, "-screen", "0", "320x240x8")
+				if err := testCmd.Start(); err == nil {
+					// Successfully started, this display is available
+					testCmd.Process.Kill()
+					testCmd.Wait()
 					display = testDisplay
 					foundDisplay = true
 					break
@@ -155,6 +164,31 @@ func ConnectWithOptions(opts ConnectOptions) (*Client, error) {
 	client.root = screen.Root
 	client.display = display
 	
+	// Start window manager if requested
+	if opts.StartWM && opts.WMName != "" {
+		// Split the window manager command into program and args
+		parts := strings.Fields(opts.WMName)
+		if len(parts) > 0 {
+			program := parts[0]
+			args := parts[1:]
+			if _, err := client.StartApp(program, args); err != nil {
+				// Log warning but don't fail - window manager is optional
+				fmt.Fprintf(os.Stderr, "Warning: failed to start window manager %s: %v\n", opts.WMName, err)
+			}
+			
+			// If we started i3, wait a bit and try to connect
+			if strings.Contains(program, "i3") {
+				time.Sleep(500 * time.Millisecond)
+				if err := client.ConnectI3(""); err != nil {
+					fmt.Fprintf(os.Stderr, "Warning: failed to connect to i3: %v\n", err)
+				}
+			}
+		}
+	} else {
+		// Try to connect to i3 if it's already running
+		client.ConnectI3("")
+	}
+	
 	return client, nil
 }
 
@@ -163,6 +197,8 @@ func (c *Client) Close() error {
 	if c.conn != nil {
 		c.conn.Close()
 	}
+	
+	// No need to close i3 connection as the library manages it internally
 	
 	// If we started Xvfb, stop it
 	if c.xvfbProcess != nil {
