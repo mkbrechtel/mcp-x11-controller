@@ -1,0 +1,40 @@
+# i3 config for MCP-controlled windows
+# Minimal config focused on automatic window maximization
+
+# Font for window titles
+font pango:monospace 8
+
+# Disable window borders for cleaner look
+default_border none
+default_floating_border none
+
+# Hide edge borders
+hide_edge_borders both
+
+# Set default layout to tabbed (acts like maximized)
+workspace_layout tabbed
+
+# Alternative: Use stacking layout
+# workspace_layout stacking
+
+# Force all windows to open in fullscreen
+for_window [class=".*"] fullscreen enable
+
+# Or if you prefer just maximized (not fullscreen):
+# for_window [class=".*"] move position 0 0, resize set 100 ppt 100 ppt
+
+# Disable focus follows mouse (better for automation)
+focus_follows_mouse no
+
+# Remove gaps between windows
+gaps inner 0
+gaps outer 0
+
+# Minimal keybindings for emergency control
+bindsym Mod1+Shift+q kill
+bindsym Mod1+f fullscreen toggle
+bindsym Mod1+Shift+e exit
+
+# No startup applications
+# No bars
+# No decorations

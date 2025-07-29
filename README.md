@@ -9,7 +9,7 @@ An MCP (Model Context Protocol) server that allows LLMs to control X11 displays.
 ## Features
 
 - **Automatic Xvfb setup** - Creates a virtual X11 display automatically
-- **Window manager support** - Launches i3 or other window managers
+- **Window manager support** - Automatically launches i3 (with -a flag) or other window managers
 - **Program launcher** - Starts Firefox or any specified program
 - **X11 Control Tools**:
   - Get screen information (dimensions, root window)
@@ -25,17 +25,16 @@ go build
 
 ## Usage
 
-### Default mode (with Xvfb, i3, and Firefox)
+### Default mode
 
 ```bash
 ./mcp-x11-controller
 ```
 
 This will:
-1. Start Xvfb on display :99 with 1024x768 resolution
-2. Launch i3 window manager
-3. Start Firefox
-4. Begin accepting MCP commands
+1. Connect to X11 (or start Xvfb if no DISPLAY is set)
+2. Launch i3 window manager with -a flag (disables autostart/wizard)
+3. Begin accepting MCP commands
 
 ### Command-line options
 
@@ -44,11 +43,10 @@ This will:
 ```
 
 Flags:
-- `-xvfb` (bool): Use Xvfb virtual display (default: true)
-- `-display` (string): X11 display number (default: ":99")
-- `-resolution` (string): Screen resolution WIDTHxHEIGHT (default: "1024x768")
-- `-wm` (string): Window manager to use, e.g., i3, openbox (default: "i3")
-- `-program` (string): Program to launch (default: "firefox")
+- `--no-wm` (bool): Disable automatic window manager startup
+- `--wm-name` (string): Window manager to start (default: "i3 -a")
+- `--help` (bool): Show help message
+- `--version` (bool): Show version
 
 ### Examples
 
@@ -58,6 +56,11 @@ Run with a different resolution and Chrome:
 ```
 
 Run without window manager:
+```bash
+./mcp-x11-controller --no-wm
+```
+
+Run with a different window manager:
 ```bash
 ./mcp-x11-controller -wm ""
 ```
@@ -90,12 +93,31 @@ Type text by sending keyboard events.
 **Arguments:**
 - `text` (string): Text to type
 
-**Note:** Supports full keyboard input including:
+**Note:** Currently supports:
 - All ASCII characters and symbols
 - Uppercase/lowercase with proper shift handling
 - Special characters (!@#$%^&*() etc.)
-- Modifier key combinations (Ctrl+A, Alt+Tab, etc.)
-- Special keys (Enter, Tab, Backspace)
+- Newline character (\n) is automatically converted to Enter key
+
+**Limitations:**
+- Does NOT support other special keys like Tab or Backspace
+- Does NOT support modifier key combinations (Ctrl+A, Alt+Tab, etc.)
+- For other special keys and combinations, use the `key_press` tool
+
+### key_press
+Press special keys or key combinations.
+
+**Arguments:**
+- `key` (string, optional): Special key name (e.g., "Enter", "Tab", "Escape", "BackSpace", "Delete", "Home", "End", "PageUp", "PageDown", "Left", "Right", "Up", "Down")
+- `combo` (string, optional): Key combination (e.g., "ctrl+c", "alt+tab", "ctrl+shift+t", "super+l")
+
+**Note:** You must provide either `key` OR `combo`, not both.
+
+**Supported modifiers for combinations:**
+- `ctrl` - Control key
+- `shift` - Shift key
+- `alt` - Alt key
+- `super` / `win` / `cmd` - Super/Windows/Command key
 
 ### take_screenshot
 Take a screenshot of the X11 display and return the image data directly.
@@ -195,15 +217,41 @@ Click at coordinates:
 }
 ```
 
-Type text with modifiers:
+Type text with newlines:
 ```json
 {
   "jsonrpc": "2.0",
   "method": "tools/call",
   "params": {
     "name": "type_text",
-    "arguments": {"text": "Hello World!\nCtrl+A\nCtrl+C"}
+    "arguments": {"text": "Hello World!\nThis is a new line"}
   },
   "id": 3
+}
+```
+
+Press special keys:
+```json
+{
+  "jsonrpc": "2.0",
+  "method": "tools/call",
+  "params": {
+    "name": "key_press",
+    "arguments": {"key": "Enter"}
+  },
+  "id": 4
+}
+```
+
+Press key combinations:
+```json
+{
+  "jsonrpc": "2.0",
+  "method": "tools/call",
+  "params": {
+    "name": "key_press",
+    "arguments": {"combo": "ctrl+c"}
+  },
+  "id": 5
 }
 ```
