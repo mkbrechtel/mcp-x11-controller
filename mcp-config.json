@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "x11-controller": {
+      "command": "go",
+      "args": ["run", "."]
+    }
+  }
+}
