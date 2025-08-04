@@ -87,7 +87,7 @@ func main() {
 	// Connect to X11 with options
 	opts := x11.ConnectOptions{
 		StartXvfb:  os.Getenv("DISPLAY") == "",
-		Resolution: "1024x768",
+		Resolution: "1920x1080",
 		StartWM:    !*noWM,
 		WMName:     *wmName,
 	}

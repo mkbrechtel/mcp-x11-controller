@@ -32,7 +32,7 @@ type ScreenInfo struct {
 type ConnectOptions struct {
 	Display      string // X11 display to use
 	StartXvfb    bool   // Whether to start Xvfb if no display
-	Resolution   string // Xvfb resolution (default: 1024x768)
+	Resolution   string // Xvfb resolution (default: 1920x1080)
 	StartWM      bool   // Whether to start a window manager
 	WMName       string // Window manager command (default: "i3 -a")
 }
@@ -41,7 +41,7 @@ type ConnectOptions struct {
 func Connect() (*Client, error) {
 	return ConnectWithOptions(ConnectOptions{
 		StartXvfb:  true,
-		Resolution: "1024x768",
+		Resolution: "1920x1080",
 		StartWM:    true,
 		WMName:     "i3 -a",
 	})
@@ -92,7 +92,7 @@ func ConnectWithOptions(opts ConnectOptions) (*Client, error) {
 		// Start Xvfb
 		resolution := opts.Resolution
 		if resolution == "" {
-			resolution = "1024x768"
+			resolution = "1920x1080"
 		}
 		
 		client.xvfbProcess = exec.Command("Xvfb", display, "-screen", "0", resolution+"x24", "-ac")
