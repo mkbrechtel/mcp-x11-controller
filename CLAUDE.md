@@ -11,7 +11,7 @@ To test the mcp-x11-controller with Claude CLI, follow these steps:
 
 2. **Run Claude CLI with the MCP server**:
    ```bash
-   claude --model sonnet --print --debug \
+   claude --model sonnet --print \
      --mcp-config mcp-config.json \
      --dangerously-skip-permissions \
      "Take a screenshot of the X11 display"
@@ -19,13 +19,12 @@ To test the mcp-x11-controller with Claude CLI, follow these steps:
 
    For more complex operations:
    ```bash
-   claude --model sonnet --print --debug \
+   claude --model sonnet --print \
      --mcp-config mcp-config.json \
      --dangerously-skip-permissions \
      "Start Firefox, navigate to example.com, click on the page, and take a screenshot"
    ```
 
-### Important Notes:
-- The `--debug` flag helps troubleshoot MCP server issues
+Notes:
 - The `--dangerously-skip-permissions` flag bypasses permission prompts for testing
 - The window manager (i3) provides better window management for applications
